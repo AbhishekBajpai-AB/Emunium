@@ -1,6 +1,6 @@
 # Emunium
 
-Human-like browser and desktop automation. No CDP, no WebDriver -- emunium drives Chrome through a custom WebSocket bridge and performs all mouse/keyboard actions at the OS level, making scripts indistinguishable from real user input. A standalone mode covers desktop apps via image template matching and OCR.
+Browser and desktop automation without CDP or WebDriver. Emunium drives Chrome through a custom WebSocket bridge and performs mouse and keyboard actions at the OS level. Detection behavior depends on the browser, site, and environment; OS-level input alone does not guarantee invisibility. Standalone mode covers desktop apps through image template matching and OCR.
 
 ![Preview](preview.gif)
 
@@ -129,7 +129,7 @@ All raise `TimeoutError` on timeout:
 browser.wait_for_element(selector, timeout=10.0)
 browser.wait_for_xpath(xpath, timeout=10.0)
 browser.wait_for_text(text, timeout=10.0)
-browser.wait_for_idle(silence=2.0, timeout=30.0)
+browser.wait_for_idle(silence=2.0, timeout=30.0)  # no active web requests for 2s
 ```
 
 ### Advanced waits with conditions
@@ -230,7 +230,7 @@ if promo:
 
 ### Network waits
 
-Wait for a specific background API request to finish before proceeding. Uses glob-style pattern matching against response URLs:
+Wait for a matching response after the most recent browser action. The wait is scoped to the current tab, and old matching responses are ignored. Uses glob-style pattern matching against response URLs:
 
 ```python
 browser.click("#fetch-data")
@@ -337,6 +337,8 @@ browser.scroll_to(x, y)                 # scroll to absolute pixel coords
 result = browser.execute_script("return document.title")
 ```
 
+The code runs in the page's main JavaScript world. Pages whose Content Security Policy blocks dynamic function compilation can reject it; this raises `RuntimeError` instead of leaving the call pending.
+
 ---
 
 ## Tab management
@@ -426,7 +428,7 @@ Downloads the latest stable Chrome for Testing build for the current platform if
 
 - Chrome only. The bridge extension targets Chrome/Chromium.
 - One active tab at a time. The bridge tracks a single pinned tab. `new_tab()` switches focus.
-- Parallel instances may conflict on the shared `port.json`. Use different `bridge_port` values.
+- Each browser session uses a private copy of the extension and its own bridge port configuration, so parallel sessions do not overwrite one another's port file.
 - Non-ASCII text is pasted via clipboard instead of typed keystroke-by-keystroke.
 - `headless=True` uses `--headless=new`. Coordinates still compute but the cursor is not visible. Use `human=False` in display-less environments.
 - Image matching uses multi-scale (0.9x, 1.0x, 1.1x) and multi-rotation (-10, 0, +10) search.
@@ -436,3 +438,19 @@ Downloads the latest stable Chrome for Testing build for the current platform if
 ## License
 
 MIT
+
+---
+
+## Development checks
+
+Run the Python unit tests with:
+
+```bash
+python -m unittest discover -s tests
+```
+
+The Chrome extension unit tests use Node's built-in test runner:
+
+```bash
+node --test tests/extension_network.test.cjs tests/extension_conditions.test.cjs
+```

@@ -86,29 +86,17 @@
         target: { tabId },
         world: "MAIN",
         args: [msg.params.code],
-        func: (code) =>
-          new Promise((resolve) => {
-            const script = document.createElement("script");
-            const callbackName =
-              "__emunium_cb_" +
-              Date.now() +
-              "_" +
-              Math.random().toString(36).slice(2);
-            window[callbackName] = (value) => {
-              delete window[callbackName];
-              resolve(value);
+        func: async (code) => {
+          try {
+            const result = await new Function(code)();
+            return {
+              success: true,
+              result: result !== undefined ? String(result) : null,
             };
-            script.textContent = `
-              try {
-                const __result = (() => { ${code} })();
-                window["${callbackName}"]({ success: true, result: __result !== undefined ? String(__result) : null });
-              } catch(e) {
-                window["${callbackName}"]({ error: e.message });
-              }
-            `;
-            document.documentElement.appendChild(script);
-            script.remove();
-          }),
+          } catch (error) {
+            return { error: error?.message || String(error) };
+          }
+        },
       });
       scope.send({ id: msg.id, result: results?.[0]?.result || { error: "No result" } });
     } catch (error) {
@@ -134,13 +122,23 @@
 
   async function handleWaitForResponse(msg) {
     const pattern = msg.params?.pattern;
-    const timeout = msg.params?.timeout || 10000;
+    const timeout = msg.params?.timeout ?? 10000;
     if (!pattern) {
       sendError(msg.id, "Missing 'pattern' parameter");
       return;
     }
     try {
-      const result = await scope.waitForResponse(pattern, timeout);
+      const tabId = await scope.resolveTabId(msg);
+      if (tabId == null) {
+        sendError(msg.id, "No active tab");
+        return;
+      }
+      const result = await scope.waitForResponse(
+        pattern,
+        timeout,
+        tabId,
+        msg.params?.sinceRequestSequence
+      );
       if (result) {
         scope.send({ id: msg.id, result });
       } else {
@@ -151,6 +149,31 @@
       }
     } catch (error) {
       sendError(msg.id, error.message);
+    }
+  }
+
+  async function handleWaitForIdle(msg) {
+    const tabId = await scope.resolveTabId(msg);
+    if (tabId == null) {
+      sendError(msg.id, "No active tab");
+      return;
+    }
+    const silenceMs = Number(msg.params?.silence ?? 2000);
+    const timeoutMs = Number(msg.params?.timeout ?? 30000);
+    if (
+      !Number.isFinite(silenceMs) ||
+      silenceMs < 0 ||
+      !Number.isFinite(timeoutMs) ||
+      timeoutMs < 0
+    ) {
+      sendError(msg.id, "Wait durations must be finite non-negative numbers");
+      return;
+    }
+    try {
+      const result = await scope.waitForIdle(tabId, silenceMs, timeoutMs);
+      scope.send({ id: msg.id, result });
+    } catch (error) {
+      sendError(msg.id, error?.message || String(error));
     }
   }
 
@@ -177,6 +200,17 @@
     }
     if (msg.method === "waitForResponse") {
       await handleWaitForResponse(msg);
+      return;
+    }
+    if (msg.method === "waitForIdle") {
+      await handleWaitForIdle(msg);
+      return;
+    }
+    if (msg.method === "getResponseMarker") {
+      scope.send({
+        id: msg.id,
+        result: { requestSequence: scope.getResponseMarker() },
+      });
       return;
     }
     if (msg.method === "getRecentResponses") {

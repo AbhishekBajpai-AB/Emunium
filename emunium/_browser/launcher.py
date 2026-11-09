@@ -23,6 +23,7 @@ class BrowserSession:
         "headless",
         "user_data_dir",
         "tmp_data_dir",
+        "tmp_extension_dir",
         "chrome_path",
     )
 
@@ -32,73 +33,109 @@ class BrowserSession:
         self.headless: bool = False
         self.user_data_dir: str | None = None
         self.tmp_data_dir: str | None = None
+        self.tmp_extension_dir: str | None = None
         self.chrome_path: str = ""
 
 
 def launch(session: BrowserSession, bridge_timeout: float = 60.0) -> None:
-    session.chrome_path = ensure_chrome()
-    session.bridge.start()
-    port = session.bridge.actual_port
-    logger.info("Bridge started on port %d", port)
+    try:
+        session.chrome_path = ensure_chrome()
+        if session.bridge is None:
+            raise RuntimeError("Browser session has no bridge")
+        session.bridge.start()
+        port = session.bridge.actual_port
+        if port is None:
+            raise RuntimeError("Bridge did not start listening")
+        logger.info("Bridge started on port %d", port)
 
-    if session.user_data_dir:
-        data_dir = str(Path(session.user_data_dir).resolve())
-    else:
-        session.tmp_data_dir = tempfile.mkdtemp(prefix="emun_profile_")
-        data_dir = session.tmp_data_dir
-        logger.info("Created temp profile: %s", data_dir)
+        if session.user_data_dir:
+            data_dir = str(Path(session.user_data_dir).resolve())
+        else:
+            session.tmp_data_dir = tempfile.mkdtemp(prefix="emun_profile_")
+            data_dir = session.tmp_data_dir
+            logger.info("Created temp profile: %s", data_dir)
 
-    _write_master_preferences(session.chrome_path)
-    _seed_profile(data_dir)
-    _patch_extension_port(port)
+        _write_master_preferences(session.chrome_path)
+        _seed_profile(data_dir)
+        extension_dir = _copy_extension_for_session(session, port)
 
-    args = [
-        session.chrome_path,
-        f"--user-data-dir={data_dir}",
-        "--disable-features=IsolateOrigins,site-per-process",
-        "--no-first-run",
-        "--no-default-browser-check",
-        "--disable-popup-blocking",
-        f"--load-extension={EXTENSION_DIR}",
-    ]
-    if session.headless:
-        args.append("--headless=new")
+        args = [
+            session.chrome_path,
+            f"--user-data-dir={data_dir}",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--disable-popup-blocking",
+            f"--load-extension={extension_dir}",
+        ]
+        if session.headless:
+            args.append("--headless=new")
 
-    session.process = subprocess.Popen(args)
-    time.sleep(2)
+        session.process = subprocess.Popen(args)
+        time.sleep(2)
 
-    connected = session.bridge.wait_for_connection(timeout=bridge_timeout)
-    if not connected:
-        raise RuntimeError("Extension did not connect within timeout")
-    logger.info("Extension connected to bridge")
+        connected = session.bridge.wait_for_connection(timeout=bridge_timeout)
+        if not connected:
+            raise RuntimeError("Extension did not connect within timeout")
+        logger.info("Extension connected to bridge")
+    except Exception:
+        try:
+            close(session)
+        except Exception:
+            logger.exception("Failed to clean up browser after launch error")
+        raise
 
 
 def close(session: BrowserSession) -> None:
-    if session.process:
-        session.process.terminate()
+    process = session.process
+    session.process = None
+    if process:
         try:
-            session.process.wait(timeout=5)
+            process.terminate()
+            process.wait(timeout=5)
         except Exception:
-            session.process.kill()
-        session.process = None
-    session.bridge.shutdown()
-    _restore_extension()
+            try:
+                process.kill()
+                process.wait(timeout=5)
+            except Exception:
+                logger.exception("Could not stop Chrome process")
+    if session.bridge:
+        try:
+            session.bridge.shutdown()
+        except Exception:
+            logger.exception("Could not stop bridge")
+    if session.tmp_extension_dir:
+        try:
+            _restore_extension(session.tmp_extension_dir)
+        except OSError:
+            logger.exception("Could not remove extension port configuration")
+        shutil.rmtree(session.tmp_extension_dir, ignore_errors=True)
+        session.tmp_extension_dir = None
     if session.tmp_data_dir:
-        try:
-            shutil.rmtree(session.tmp_data_dir, ignore_errors=True)
-        except Exception:
-            pass
+        shutil.rmtree(session.tmp_data_dir, ignore_errors=True)
         session.tmp_data_dir = None
     logger.info("Browser closed")
 
 
-def _patch_extension_port(port: int) -> None:
-    port_file = Path(EXTENSION_DIR) / "port.json"
+def _copy_extension_for_session(session: BrowserSession, port: int) -> str:
+    extension_dir = tempfile.mkdtemp(prefix="emun_extension_")
+    session.tmp_extension_dir = extension_dir
+    shutil.copytree(
+        EXTENSION_DIR,
+        extension_dir,
+        dirs_exist_ok=True,
+        ignore=shutil.ignore_patterns("port.json", ".port"),
+    )
+    _patch_extension_port(port, extension_dir)
+    return extension_dir
+
+
+def _patch_extension_port(port: int, extension_dir: str) -> None:
+    port_file = Path(extension_dir) / "port.json"
     port_file.write_text(json.dumps({"port": port}), encoding="utf-8")
 
 
-def _restore_extension() -> None:
-    port_file = Path(EXTENSION_DIR) / "port.json"
+def _restore_extension(extension_dir: str) -> None:
+    port_file = Path(extension_dir) / "port.json"
     if port_file.exists():
         port_file.unlink(missing_ok=True)
 

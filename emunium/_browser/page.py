@@ -46,16 +46,5 @@ def scroll_to(bridge: Bridge, x: int, y: int) -> dict:
 
 
 def wait_for_idle(bridge: Bridge, silence: float = 2.0, timeout: float = 30.0) -> bool:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        try:
-            info = bridge.page_info()
-            if info.get("readyState") == "complete":
-                time.sleep(silence)
-                info2 = bridge.page_info()
-                if info2.get("readyState") == "complete":
-                    return True
-        except Exception:
-            pass
-        time.sleep(0.3)
-    return False
+    result = bridge.wait_for_idle(silence=silence, timeout=timeout)
+    return bool(result.get("success"))

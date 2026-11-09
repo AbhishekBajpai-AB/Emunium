@@ -4,7 +4,7 @@
   const scope = globalThis.EmuniumContent;
 
   function isVisible(element) {
-    if (element.offsetWidth <= 0 && element.offsetHeight <= 0) {
+    if (element.offsetWidth <= 0 || element.offsetHeight <= 0) {
       return false;
     }
     const style = getComputedStyle(element);
@@ -50,28 +50,33 @@
         return false;
       }
     },
-    stable: () => true,
+    stable: (el, cond, allEls, stableForMs) =>
+      stableForMs >= (cond.duration ?? 300),
     count_gt: (el, cond, allEls) => allEls.length > cond.value,
     count_eq: (el, cond, allEls) => allEls.length === cond.value,
   };
 
-  function evaluate(el, condition, allElements) {
+  function evaluate(el, condition, allElements, stableForMs = 0) {
     const type = condition.type;
     if (type === "any_of") {
       return condition.conditions.some((group) =>
-        group.every((c) => evaluate(el, c, allElements))
+        group.every((c) => evaluate(el, c, allElements, stableForMs))
       );
     }
     if (type === "all_of") {
       return condition.conditions.every((group) =>
-        group.every((c) => evaluate(el, c, allElements))
+        group.every((c) => evaluate(el, c, allElements, stableForMs))
       );
     }
     if (type === "not") {
-      return !condition.condition.every((c) => evaluate(el, c, allElements));
+      return !condition.condition.every((c) =>
+        evaluate(el, c, allElements, stableForMs)
+      );
     }
     const evaluator = ConditionEvaluators[type];
-    return evaluator ? evaluator(el, condition, allElements) : true;
+    return evaluator
+      ? evaluator(el, condition, allElements, stableForMs)
+      : true;
   }
 
   function matchesCondition(el, condition, allElements) {
@@ -94,13 +99,21 @@
     });
   }
 
-  function checkElementConditions(element, state, conditions, allElements) {
+  function checkElementConditions(
+    element,
+    state,
+    conditions,
+    allElements,
+    stableForMs = 0
+  ) {
     const allEls = allElements || [];
     if (element === null) {
       if (!hasDetachedCondition(conditions)) {
         return false;
       }
-      return conditions.every((c) => evaluate(null, c, allEls));
+      return conditions.every((c) =>
+        evaluate(null, c, allEls, stableForMs)
+      );
     }
     if (state === "visible" && !isVisible(element)) {
       return false;
@@ -114,10 +127,15 @@
     ) {
       return false;
     }
+    if (state === "stable" && stableForMs < 300) {
+      return false;
+    }
     if (!Array.isArray(conditions) || conditions.length === 0) {
       return true;
     }
-    return conditions.every((c) => evaluate(element, c, allEls));
+    return conditions.every((c) =>
+      evaluate(element, c, allEls, stableForMs)
+    );
   }
 
   Object.assign(scope, {

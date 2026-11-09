@@ -6,6 +6,7 @@ import time
 import pyautogui
 from humancursor import SystemCursor
 
+from emunium._element_interactor import ElementInteractor
 from emunium._standalone import ocr, vision
 from emunium._standalone.config import ClickType, Config, StandaloneConfig
 
@@ -149,19 +150,11 @@ class Emunium:
     def type_text(
         text: str, characters_per_minute: int = 280, offset: int = 20
     ) -> None:
-        try:
-            import keyboard as _keyboard
-        except ImportError:
-            _keyboard = None
-
-        time_per_char = 60 / characters_per_minute
-        for char in text:
-            delay = time_per_char + random.uniform(-offset, offset) / 1000
-            if _keyboard:
-                _keyboard.write(char)
-            else:
-                pyautogui.typewrite(char, interval=0)
-            time.sleep(max(0, delay))
+        ElementInteractor().type_text(
+            text,
+            characters_per_minute=characters_per_minute,
+            offset=offset,
+        )
 
     def scroll_to(self, element_center: dict[str, int]) -> None:
         window_height = pyautogui.size().height

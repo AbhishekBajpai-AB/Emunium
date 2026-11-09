@@ -132,6 +132,7 @@ class Element:
         human: bool = True,
     ) -> None:
         self.scroll_into_view()
+        self._bridge.mark_response_boundary()
         x, y = int(self._screen_x), int(self._screen_y)
         logger.info(
             "Clicking element at Screen(%d, %d) type=%s human=%s",
@@ -150,6 +151,7 @@ class Element:
         human: bool = True,
     ) -> None:
         self.scroll_into_view()
+        self._bridge.mark_response_boundary()
         x, y = _INTERACTOR.screen_point(
             self._screen_x,
             self._screen_y,
@@ -206,12 +208,14 @@ class Element:
     def drag_to(self, target: Element, *, human: bool = True) -> None:
         self.scroll_into_view()
         target.scroll_into_view()
+        self._bridge.mark_response_boundary()
         start = self._current_screen_point()
         end = target._current_screen_point()
         logger.info("Dragging from Screen%s to Screen%s", start, end)
         _INTERACTOR.drag(start, end, human=human)
 
     def focus(self) -> dict:
+        self._bridge.mark_response_boundary()
         return self._bridge.focus(self._element_id)
 
     def get_attribute(self, name: str) -> str | None:

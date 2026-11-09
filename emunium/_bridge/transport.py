@@ -27,6 +27,7 @@ class Transport:
         self._connected = threading.Event()
         self._event_handlers: dict[str, list[Callable]] = {}
         self._ready_event = threading.Event()
+        self._startup_error: BaseException | None = None
         self._pinned_tab_id: int | None = None
 
     @property
@@ -37,25 +38,41 @@ class Transport:
         return None
 
     def start(self, timeout: float = 30.0) -> None:
+        self._ready_event.clear()
+        self._startup_error = None
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(
             target=self._run_loop, daemon=True, name="emun-bridge"
         )
         self._thread.start()
-        self._ready_event.wait(timeout=timeout)
+        if not self._ready_event.wait(timeout=timeout):
+            raise TimeoutError("Bridge server did not start within timeout")
+        if self._startup_error is not None:
+            raise RuntimeError("Bridge server failed to start") from self._startup_error
         logger.info("Bridge listening on %s:%d", self.host, self.actual_port)
 
     def _run_loop(self) -> None:
-        asyncio.set_event_loop(self._loop)
-        self._loop.run_until_complete(self._serve())
+        try:
+            asyncio.set_event_loop(self._loop)
+            self._loop.run_until_complete(self._serve())
+        except BaseException as error:
+            self._startup_error = error
+            self._ready_event.set()
+            logger.exception("Bridge server stopped unexpectedly")
+        finally:
+            if self._loop and not self._loop.is_closed():
+                self._loop.close()
 
     async def _serve(self) -> None:
+        self._stop_future = self._loop.create_future()
         self._server = await websockets.serve(
             self._handle_connection, self.host, self.port
         )
         self._ready_event.set()
-        self._stop_future = self._loop.create_future()
         await self._stop_future
+        if self._server:
+            self._server.close()
+            await self._server.wait_closed()
 
     async def _handle_connection(
         self, ws: websockets.server.WebSocketServerProtocol
@@ -234,10 +251,6 @@ class Transport:
                 await self._ws.close()
             except Exception:
                 pass
-
-        if self._server:
-            self._server.close()
-            await self._server.wait_closed()
 
         if hasattr(self, "_stop_future") and not self._stop_future.done():
             self._stop_future.set_result(None)

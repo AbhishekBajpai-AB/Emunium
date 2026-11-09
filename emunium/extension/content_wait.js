@@ -55,17 +55,20 @@
     });
   }
 
-  function needsStableState(state, conditions) {
-    return (
-      state === "stable" || conditions?.some((c) => c.type === "stable")
-    );
-  }
-
-  function getStableDuration(conditions) {
-    const stable = conditions?.find(
-      (c) => c.type === "stable" && c.duration
-    );
-    return stable ? stable.duration : 300;
+  function hasStableCondition(conditions) {
+    if (!Array.isArray(conditions)) return false;
+    return conditions.some((condition) => {
+      if (condition.type === "stable") return true;
+      if (condition.type === "any_of" || condition.type === "all_of") {
+        return condition.conditions.some((group) =>
+          hasStableCondition(group)
+        );
+      }
+      if (condition.type === "not") {
+        return hasStableCondition(condition.condition);
+      }
+      return false;
+    });
   }
 
   function fingerprint(element) {
@@ -94,6 +97,21 @@
       if (timeoutId) clearTimeout(timeoutId);
     }
 
+    function stableFor(element) {
+      if (!options.needsStable) return Infinity;
+      if (!element) {
+        lastFingerprint = null;
+        stableSince = 0;
+        return 0;
+      }
+      const currentFingerprint = fingerprint(element);
+      if (currentFingerprint !== lastFingerprint) {
+        lastFingerprint = currentFingerprint;
+        stableSince = Date.now();
+      }
+      return Math.max(0, Date.now() - stableSince);
+    }
+
     function resolveDetached(observer, intervalId, timeoutId) {
       resolved = true;
       cleanup(observer, intervalId, timeoutId);
@@ -116,23 +134,19 @@
       if (resolved) return;
       const element = findElement();
       if (!element) {
+        stableFor(null);
         tryDetached(observer, intervalId, timeoutId);
         return;
       }
       const allEls = findAllElements();
       if (!scope.checkElementConditions(
-        element, options.state, options.conditions, allEls
+        element,
+        options.state,
+        options.conditions,
+        allEls,
+        stableFor(element)
       )) {
         return;
-      }
-      if (options.needsStable) {
-        const fp = fingerprint(element);
-        if (fp !== lastFingerprint) {
-          lastFingerprint = fp;
-          stableSince = Date.now();
-          return;
-        }
-        if (Date.now() - stableSince < options.stableDuration) return;
       }
       resolved = true;
       cleanup(observer, intervalId, timeoutId);
@@ -153,19 +167,19 @@
         return false;
       }
       const allEls = findAllElements();
+      const elapsedStable = stableFor(element);
       if (!scope.checkElementConditions(
-        element, options.state, options.conditions, allEls
+        element,
+        options.state,
+        options.conditions,
+        allEls,
+        elapsedStable
       )) {
         return false;
       }
-      if (!options.needsStable) {
-        resolved = true;
-        resolve(scope.serializeElement(element));
-        return true;
-      }
-      lastFingerprint = fingerprint(element);
-      stableSince = Date.now();
-      return false;
+      resolved = true;
+      resolve(scope.serializeElement(element));
+      return true;
     }
 
     function finish(observer, intervalId) {
@@ -183,11 +197,15 @@
         }
       } else {
         const allEls = findAllElements();
+        const elapsedStable = stableFor(element);
         if (
           scope.checkElementConditions(
-            element, options.state, options.conditions, allEls
-          ) &&
-          !options.needsStable
+            element,
+            options.state,
+            options.conditions,
+            allEls,
+            elapsedStable
+          )
         ) {
           resolve(scope.serializeElement(element));
           return;
@@ -207,15 +225,14 @@
   function waitForSelector({ selector, type, timeout, state, conditions }) {
     const options = {
       conditions,
-      needsStable: needsStableState(state, conditions),
+      needsStable: state === "stable" || hasStableCondition(conditions),
       selector,
-      stableDuration: getStableDuration(conditions),
       state,
     };
     const selectorType = type || "css";
     const findElement = buildFinder(selector, selectorType);
     const findAllElements = buildAllFinder(selector, selectorType);
-    const timeoutMs = timeout || 10000;
+    const timeoutMs = Math.max(0, Number(timeout ?? 10000));
 
     return new Promise((resolve) => {
       const tracker = createWaitTracker(
@@ -229,11 +246,13 @@
       observer = new MutationObserver(() => {
         tracker.maybeResolve(observer, intervalId, timeoutId);
       });
-      observer.observe(document.documentElement, {
-        childList: true,
-        subtree: true,
-        attributes: true,
-      });
+      if (document.documentElement) {
+        observer.observe(document.documentElement, {
+          childList: true,
+          subtree: true,
+          attributes: true,
+        });
+      }
       intervalId = setInterval(() => {
         tracker.maybeResolve(observer, intervalId, timeoutId);
       }, 50);

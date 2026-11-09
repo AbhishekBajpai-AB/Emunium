@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import random
+import sys
 import time
 
 import pyautogui
@@ -62,6 +63,13 @@ class ElementInteractor:
         characters_per_minute: int = 280,
         offset: int = 20,
     ) -> None:
+        if characters_per_minute < 0:
+            raise ValueError("characters_per_minute cannot be negative")
+        if offset < 0:
+            raise ValueError("offset cannot be negative")
+        if not self._is_ascii_text(text):
+            self._paste_text(text)
+            return
         if characters_per_minute > 0:
             self._type_with_rhythm(
                 text,
@@ -69,10 +77,7 @@ class ElementInteractor:
                 offset=offset,
             )
             return
-        if self._is_ascii_text(text):
-            pyautogui.typewrite(text, interval=0.03)
-            return
-        self._paste_text(text)
+        pyautogui.typewrite(text, interval=0.03)
 
     def drag(
         self,
@@ -142,11 +147,14 @@ class ElementInteractor:
             should_restore = True
         except pyperclip.PyperclipException:
             should_restore = False
-        pyperclip.copy(text)
-        pyautogui.hotkey("ctrl", "v")
-        time.sleep(0.05)
-        if should_restore:
-            try:
-                pyperclip.copy(previous_clipboard)
-            except pyperclip.PyperclipException:
-                pass
+        try:
+            pyperclip.copy(text)
+            modifier = "command" if sys.platform == "darwin" else "ctrl"
+            pyautogui.hotkey(modifier, "v")
+            time.sleep(0.05)
+        finally:
+            if should_restore:
+                try:
+                    pyperclip.copy(previous_clipboard)
+                except pyperclip.PyperclipException:
+                    pass

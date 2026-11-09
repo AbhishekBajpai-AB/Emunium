@@ -5,8 +5,8 @@ build-backend = "hatchling.build"
 [project]
 name = "emunium"
 version = "3.0.0"
-description = "Human-like, undetectable browser automation. Bypasses CDP/WebDriver via custom bridge and native OS inputs."
-readme = "README.md"
+description = "Browser and desktop automation using a Chrome extension bridge and OS-level input."
+readme = "README.MD"
 license = { file = "LICENSE" }
 requires-python = ">=3.8"
 authors = [

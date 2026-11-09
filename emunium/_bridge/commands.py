@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 from emunium._bridge.transport import Transport
 
 
@@ -130,9 +132,36 @@ class NetworkCommands:
     def __init__(self, transport: Transport) -> None:
         self._t = transport
 
-    def wait_for_response(self, pattern: str, timeout: float = 10.0) -> dict | None:
+    def get_response_marker(self, timeout: float = 10.0) -> int:
+        result = self._t._send_with_retry("getResponseMarker", timeout=timeout)
+        if isinstance(result, dict):
+            return int(result.get("requestSequence", 0))
+        return 0
+
+    def wait_for_response(
+        self,
+        pattern: str,
+        timeout: float = 10.0,
+        since_request_sequence: int | None = None,
+    ) -> dict | None:
         params = {"pattern": pattern, "timeout": int(timeout * 1000)}
+        if since_request_sequence is not None:
+            params["sinceRequestSequence"] = since_request_sequence
         return self._t._send_optional("waitForResponse", params, timeout=timeout + 5)
+
+    def wait_for_idle(
+        self, silence: float = 2.0, timeout: float = 30.0
+    ) -> dict:
+        if not math.isfinite(silence) or silence < 0:
+            raise ValueError("silence must be a finite non-negative number")
+        if not math.isfinite(timeout) or timeout < 0:
+            raise ValueError("timeout must be a finite non-negative number")
+        result = self._t.send(
+            "waitForIdle",
+            {"silence": int(silence * 1000), "timeout": int(timeout * 1000)},
+            timeout=timeout + silence + 5,
+        )
+        return result if isinstance(result, dict) else {"success": False}
 
     def get_recent_responses(self, timeout: float = 10.0) -> list[dict]:
         result = self._t._send_with_retry("getRecentResponses", timeout=timeout)

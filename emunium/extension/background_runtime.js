@@ -9,9 +9,9 @@
         target: { tabId: sender.tab.id },
         world: "MAIN",
         args: [msg.code],
-        func: (code) => {
+        func: async (code) => {
           try {
-            const result = new Function(code)();
+            const result = await new Function(code)();
             return {
               success: true,
               result: result !== undefined ? String(result) : null,
