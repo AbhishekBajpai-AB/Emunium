@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
+import ipaddress
 import json
 import logging
+import re
+import secrets
 import threading
 import time
 from typing import Callable
@@ -15,8 +19,15 @@ logger = logging.getLogger("emunium.bridge")
 
 class Transport:
     def __init__(self, host: str = "127.0.0.1", port: int = 0) -> None:
-        self.host = host
+        try:
+            address = ipaddress.ip_address(host)
+        except ValueError as error:
+            raise ValueError("Bridge host must be a loopback IP address") from error
+        if not address.is_loopback or getattr(address, "scope_id", None):
+            raise ValueError("Bridge may only bind to a loopback IP address")
+        self.host = address.compressed
         self.port = port
+        self.auth_token = secrets.token_urlsafe(32)
         self._server: websockets.server.WebSocketServer | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
@@ -77,6 +88,15 @@ class Transport:
     async def _handle_connection(
         self, ws: websockets.server.WebSocketServerProtocol
     ) -> None:
+        if not self._is_authorized_connection(ws):
+            logger.warning("Rejected unauthorized bridge connection")
+            await ws.close(code=1008, reason="Unauthorized")
+            return
+        if self._connected.is_set():
+            logger.warning("Rejected additional bridge connection")
+            await ws.close(code=1008, reason="Bridge already has a connection")
+            return
+
         logger.info("Extension connected")
         self._ws = ws
         self._connected.set()
@@ -104,6 +124,46 @@ class Transport:
             logger.info("Extension disconnected")
             self._ws = None
             self._connected.clear()
+
+    def _is_authorized_connection(
+        self, ws: websockets.server.WebSocketServerProtocol
+    ) -> bool:
+        request = getattr(ws, "request", None)
+        path = getattr(request, "path", None) if request is not None else None
+        if path is None:
+            path = getattr(ws, "path", None)
+
+        headers = getattr(request, "headers", None) if request is not None else None
+        if headers is None:
+            headers = getattr(ws, "request_headers", None)
+        if headers is None:
+            return False
+
+        expected_path = f"/bridge/{self.auth_token}"
+        if not isinstance(path, str) or not hmac.compare_digest(
+            path.encode("utf-8", errors="surrogatepass"), expected_path.encode("ascii")
+        ):
+            return False
+
+        origin = headers.get("Origin", "")
+        if not re.fullmatch(r"chrome-extension://[a-p]{32}", origin):
+            return False
+
+        remote_address = getattr(ws, "remote_address", None)
+        if not isinstance(remote_address, tuple) or not remote_address:
+            return False
+        try:
+            if not ipaddress.ip_address(remote_address[0]).is_loopback:
+                return False
+        except ValueError:
+            return False
+
+        port = self.actual_port
+        if port is None:
+            return False
+        address = ipaddress.ip_address(self.host)
+        host = f"[{self.host}]" if address.version == 6 else self.host
+        return headers.get("Host", "") == f"{host}:{port}"
 
     def _dispatch_event(self, msg: dict) -> None:
         event_name = msg.get("event", "")

@@ -57,7 +57,12 @@ def launch(session: BrowserSession, bridge_timeout: float = 60.0) -> None:
 
         _write_master_preferences(session.chrome_path)
         _seed_profile(data_dir)
-        extension_dir = _copy_extension_for_session(session, port)
+        extension_dir = _copy_extension_for_session(
+            session,
+            port,
+            host=getattr(session.bridge, "host", "127.0.0.1"),
+            auth_token=getattr(session.bridge, "auth_token", None),
+        )
 
         args = [
             session.chrome_path,
@@ -116,7 +121,12 @@ def close(session: BrowserSession) -> None:
     logger.info("Browser closed")
 
 
-def _copy_extension_for_session(session: BrowserSession, port: int) -> str:
+def _copy_extension_for_session(
+    session: BrowserSession,
+    port: int,
+    host: str = "127.0.0.1",
+    auth_token: str | None = None,
+) -> str:
     extension_dir = tempfile.mkdtemp(prefix="emun_extension_")
     session.tmp_extension_dir = extension_dir
     shutil.copytree(
@@ -125,13 +135,21 @@ def _copy_extension_for_session(session: BrowserSession, port: int) -> str:
         dirs_exist_ok=True,
         ignore=shutil.ignore_patterns("port.json", ".port"),
     )
-    _patch_extension_port(port, extension_dir)
+    _patch_extension_port(port, extension_dir, host, auth_token)
     return extension_dir
 
 
-def _patch_extension_port(port: int, extension_dir: str) -> None:
+def _patch_extension_port(
+    port: int,
+    extension_dir: str,
+    host: str = "127.0.0.1",
+    auth_token: str | None = None,
+) -> None:
     port_file = Path(extension_dir) / "port.json"
-    port_file.write_text(json.dumps({"port": port}), encoding="utf-8")
+    config: dict[str, object] = {"port": port}
+    if auth_token is not None:
+        config.update({"host": host, "token": auth_token})
+    port_file.write_text(json.dumps(config), encoding="utf-8")
 
 
 def _restore_extension(extension_dir: str) -> None:

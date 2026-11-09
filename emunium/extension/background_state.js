@@ -6,6 +6,7 @@
     ws: null,
     wsUrl: null,
     reconnectTimer: null,
+    connecting: false,
     readyTabs: new Set(),
     tabDocIds: new Map(),
     pinnedTabId: null,
@@ -19,8 +20,18 @@
       );
       if (response.ok) {
         const data = await response.json();
-        if (data.port) {
-          return data.port;
+        const host = data.host || "127.0.0.1";
+        const isIPv4Loopback = /^127(?:\.\d{1,3}){3}$/.test(host) &&
+          host.split(".").every((part) => Number(part) <= 255);
+        if (
+          Number.isInteger(data.port) &&
+          data.port > 0 &&
+          data.port <= 65535 &&
+          (isIPv4Loopback || host === "::1") &&
+          typeof data.token === "string" &&
+          /^[A-Za-z0-9_-]{40,50}$/.test(data.token)
+        ) {
+          return { host, port: data.port, token: data.token };
         }
       }
     } catch {}
@@ -72,25 +83,35 @@
   }
 
   async function connect() {
-    if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+    if (state.connecting || (state.ws && (
+      state.ws.readyState === WebSocket.OPEN ||
+      state.ws.readyState === WebSocket.CONNECTING
+    ))) {
       return;
     }
-    const port = await getPort();
-    if (!port) {
-      scheduleReconnect(2000);
-      return;
-    }
-
-    state.wsUrl = `ws://127.0.0.1:${port}`;
+    state.connecting = true;
     try {
-      state.ws = new WebSocket(state.wsUrl);
-    } catch {
-      scheduleReconnect(2000);
-      return;
-    }
+      const config = await getPort();
+      if (!config) {
+        scheduleReconnect(2000);
+        return;
+      }
 
-    if (typeof scope.attachSocketHandlers === "function") {
-      scope.attachSocketHandlers(state.ws);
+      const host = config.host === "::1" ? "[::1]" : config.host;
+      state.wsUrl = `ws://${host}:${config.port}/bridge/${encodeURIComponent(config.token)}`;
+      try {
+        state.ws = new WebSocket(state.wsUrl);
+      } catch {
+        state.ws = null;
+        scheduleReconnect(2000);
+        return;
+      }
+
+      if (typeof scope.attachSocketHandlers === "function") {
+        scope.attachSocketHandlers(state.ws);
+      }
+    } finally {
+      state.connecting = false;
     }
   }
 

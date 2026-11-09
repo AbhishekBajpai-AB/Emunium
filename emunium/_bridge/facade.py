@@ -28,6 +28,14 @@ class Bridge:
         return self._transport.actual_port
 
     @property
+    def host(self) -> str:
+        return self._transport.host
+
+    @property
+    def auth_token(self) -> str:
+        return self._transport.auth_token
+
+    @property
     def pinned_tab_id(self) -> int | None:
         return self._transport._pinned_tab_id
 

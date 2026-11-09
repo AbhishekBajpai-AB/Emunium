@@ -429,6 +429,7 @@ Downloads the latest stable Chrome for Testing build for the current platform if
 - Chrome only. The bridge extension targets Chrome/Chromium.
 - One active tab at a time. The bridge tracks a single pinned tab. `new_tab()` switches focus.
 - Each browser session uses a private copy of the extension and its own bridge port configuration, so parallel sessions do not overwrite one another's port file.
+- The WebSocket bridge binds only to a loopback IP and requires a random per-session token and a Chrome extension origin; it rejects other origins and additional connections.
 - Non-ASCII text is pasted via clipboard instead of typed keystroke-by-keystroke.
 - `headless=True` uses `--headless=new`. Coordinates still compute but the cursor is not visible. Use `human=False` in display-less environments.
 - Image matching uses multi-scale (0.9x, 1.0x, 1.1x) and multi-rotation (-10, 0, +10) search.
